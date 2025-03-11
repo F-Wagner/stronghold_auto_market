@@ -1,156 +1,74 @@
 // dllmain.cpp : Defines the entry point for the DLL application.
 #include "pch.h"
+#include <windows.h>
+#include <commctrl.h>
+#include <tchar.h>
+#include <stdio.h>
 
-/**
- * hook destination to source adress
- */
-bool Detour32(void* src, void* dst, int len) {
-    if (len < 5) return false;
+#pragma comment(lib, "comctl32.lib")
 
-    DWORD curProtection;
-    VirtualProtect(src, len, PAGE_EXECUTE_READWRITE, &curProtection);
+// Global instance handle for our DLL
+HINSTANCE g_hInstance;
 
-    memset(src, 0x90, len);
+//-------------------------------------------------------------------
+// Global definitions for resources and settings
+//-------------------------------------------------------------------
+#define NUM_RESOURCES 20
 
-    uintptr_t relativeAddress = ((uintptr_t)dst - (uintptr_t)src) - 5;
-
-    *(BYTE*)src = 0xE9;
-    *(uintptr_t*)((uintptr_t)src + 1) = relativeAddress;
-
-    VirtualProtect(src, len, curProtection, &curProtection);
-
-    return true;
-}
-/**
- * revert changes of Detour32
- */
-void unDetour(void* src) {
-    const int instruction_len = 5;
-    DWORD curProtection;
-    VirtualProtect(src, instruction_len, PAGE_EXECUTE_READWRITE, &curProtection);
-    *(BYTE*)src = 0xE8;
-    *(uintptr_t*)((uintptr_t)src + 1) = 0xFFFF5D15;
-    VirtualProtect(src, instruction_len, curProtection, &curProtection);
-}
-
-typedef int(__thiscall * _Get_sell_value)(void* pThis, int a1, int a2);
-_Get_sell_value get_sell_value;
-
-typedef void(__cdecl * _Trade)(int player,int buy0_sell1,int item_type);
-_Trade trade;
-
-typedef int(__thiscall * _Print_text)(void* pThis, char* textptr, int text_size, int x, int y, int color, int a7);
-_Print_text print_text;
-
-
-short* const selectionInMarket = (short*)0x115F814;
-const unsigned char MATERIAL_IDS[] = {
-    2u, // wood
-    3u, // hops
-    4u, // stone
-    6u, // iron
-    7u, // pitch
-    9u, // wheat
-    10u, // bread
-    11u, // cheese
-    12u, // meat
-    13u, // fruit
-    14u, // ale
-    // 15u, // gold 
-    16u, // flour
-    // Armory
-    17u, // bows
-    18u, // crossbows
-    19u, // spears
-    20u, // pikes
-    21u, // maces
-    22u, // swords
-    23u, // leather armor
-    24u // metal armor
+// Autosell thresholds: if the in-game resource count exceeds this value, sell.
+unsigned short settingsSell[NUM_RESOURCES] = {
+    200,200,200,200,200,200,200,200,200,200,
+    200,200,200,200,200,200,200,200,200,200
 };
-int comparator_for_MATERIAL_IDS(const unsigned char* lhs, const unsigned char* rhs) {
-    if (*lhs < *rhs) return -1;
-    else if (*rhs < *lhs) return 1;
-    else return 0;
-}
-const unsigned char* getSelection() {
-    return (const unsigned char*)bsearch(selectionInMarket, MATERIAL_IDS, sizeof(MATERIAL_IDS), sizeof(unsigned char), (int(*)(const void*, const void*)) comparator_for_MATERIAL_IDS);
-}
-/**
- * Every settings value corresponds to material in MATERIAL_IDS
- */
-unsigned short settings[] = { 200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,200 };
 
-const char digits[] = { '0', '1', '2', '3', '4', '5', '6', '7', '8', '9' };
-int* const hooverOverBuy = (int*)0X5FDF0A;
-char text[] = "autosell >000 PgUp/PgDn";
-/**
- * this for print_text method(__thiscall) defines text drawing style.
- * Points at the same style as style for black bottom layer of sell and buy in market
- */
-int* const pthis_print_text = (int*)0x02157824;
-void printMyText() {
-    // to remove text when hoovering over buy button
-    // no need to remove for sell because of place where function is hooked
-    if (*hooverOverBuy & 1) return;
-    const unsigned char * selection = getSelection();
-    if (selection == NULL) return;
-    auto index_of_id = selection - MATERIAL_IDS;
+// Autobuy thresholds: if the in-game resource count is below this value, buy.
+// Initialize to 0 so nothing is bought by default.
+unsigned short settingsBuy[NUM_RESOURCES] = {
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+};
 
-    text[10] = digits[(settings[index_of_id] % 1000) / 100];
-    text[11] = digits[(settings[index_of_id] % 100) / 10];
-    text[12] = digits[settings[index_of_id] % 10];
+// Resource IDs corresponding to each material.
+const unsigned char MATERIAL_IDS[NUM_RESOURCES] = {
+    2u,  3u,  4u,  6u,  7u,  9u,  10u, 11u, 12u, 13u,
+    14u, 16u, 17u, 18u, 19u, 20u, 21u, 22u, 23u, 24u
+};
 
-    // setup arguments for print_text
-    *pthis_print_text = 0X57;
-    const unsigned x = 0x2E8;
-    const unsigned y = 0x420;
-    const unsigned color = 0;
-    const unsigned unknown = 0;
+// Names for each resource (used in the UI).
+const TCHAR* resourceNames[NUM_RESOURCES] = {
+    _T("wood"),
+    _T("hops"),
+    _T("stone"),
+    _T("iron"),
+    _T("pitch"),
+    _T("wheat"),
+    _T("bread"),
+    _T("cheese"),
+    _T("meat"),
+    _T("fruit"),
+    _T("ale"),
+    _T("flour"),
+    _T("bows"),
+    _T("crossbows"),
+    _T("spears"),
+    _T("pikes"),
+    _T("maces"),
+    _T("swords"),
+    _T("leather armor"),
+    _T("metal armor")
+};
 
-    print_text(pthis_print_text, text,sizeof(text), x, y, color, unknown);
-}
+//-------------------------------------------------------------------
+// Auto trading (sell and buy) functionality definitions
+//-------------------------------------------------------------------
 
-DWORD jumpback;
-void __declspec(naked) hookOverGetSellValue() {
-    __asm {
-        call get_sell_value
-        push edx
-        push eax
-        push ecx
-        call printMyText
-        pop ecx
-        pop eax
-        pop edx
-        jmp[jumpback]
-    }
-}
-
-/**
- * Order n defined by number of previously built building
- * if 0==n then the market doesn't exist 
- * if n>0 then the market exists
- * if market is destroyed its value is set to 0
- * Value is from line:
- * .text:004570B3 mov     eax, [ecx + ebp + 30EECh]
- * this line is used to get if previous market exists during building new
- * ecx(0x39F4) and ebx(0x0112B0B8) always have same value. Therefore, the eax is always at the same place 0x115F998
- */
+// Market existence check (example address).
 unsigned* const MarketBuildOrder = (unsigned* const)0x115F998;
 inline bool doesMarketExist() {
     return *MarketBuildOrder > 0;
 }
-short* const inMenu = (short*)0x1FE7D2C;
-const short INTRAIDING = 0x39;
 
-int* const ADDRESS_OF_FIRST_MATERIAL = (int*)0x0115FCC4;
-/**
- * Address of every material from MATERIAL_IDS.
- * It's created using ADDRESS_OF_FIRST_MATERIAL(wood) 0x115fcc4 and moving pointer by id difference
- * wood (id=2), stone(id=4) -> difference = 2 -> 0x115fcc4+difference(pointer arithmetic) = 0x115fccc
- * alternative notation: sizeof(int*) = 4 -> 0x115fcc4+difference*sizeof(int*)(int arithmetic) = 0x115fccc
- */
-int* const MATERIAL_ADDRESES[] = {
+// Material addresses in memory (example addresses).
+int* const MATERIAL_ADDRESSES[NUM_RESOURCES] = {
     (int*)0x115fcc4, (int*)0x115fcc8, (int*)0x115fccc, (int*)0x115fcd4,
     (int*)0x115fcd8, (int*)0x115fce0, (int*)0x115fce4, (int*)0x115fce8,
     (int*)0x115fcec, (int*)0x115fcf0, (int*)0x115fcf4, (int*)0x115fcfc,
@@ -158,60 +76,207 @@ int* const MATERIAL_ADDRESES[] = {
     (int*)0x115fd10, (int*)0x115fd14, (int*)0x115fd18, (int*)0x115fd1c
 };
 
-void autoTrade() {
-    if (!doesMarketExist()) return;
-    if (*inMenu == INTRAIDING) {
-        const unsigned char* selection = getSelection();
-        if (selection != NULL) {
-            size_t index_of_id = selection - MATERIAL_IDS;
-            if (GetAsyncKeyState(VK_NEXT) & 1) {
-                settings[index_of_id] = max(0, settings[index_of_id] - 10);
-            }
-            if (GetAsyncKeyState(VK_PRIOR) & 1) {
-                settings[index_of_id] = min(999, settings[index_of_id] + 10);
-            }
-        }
+// Trade function pointer.
+// The second parameter indicates: 1 for selling, 0 for buying.
+typedef void(__cdecl* _Trade)(int player, int buy0_sell1, int item_type);
+_Trade trade = nullptr;
 
-    }
-#pragma loop(ivdep)
-    for(size_t i = 0;i<sizeof(MATERIAL_IDS);++i)
-        if (*MATERIAL_ADDRESES[i] > settings[i])
+// Auto-sell: If resource count is above the sell threshold, sell.
+void autoSell() {
+    if (!doesMarketExist())
+        return;
+    for (int i = 0; i < NUM_RESOURCES; i++) {
+        if (*MATERIAL_ADDRESSES[i] > settingsSell[i]) {
             trade(1, 1, MATERIAL_IDS[i]);
+        }
+    }
 }
 
-
-DWORD WINAPI MainThread(LPVOID param) {
-    uintptr_t moduleBase = (uintptr_t)GetModuleHandle(NULL);
-    const unsigned tradeFunctionAddress = 0x0065E60;
-    const unsigned printTextFunction = 0x72D60;
-    const unsigned sellFunctionValue = 0x5B7F0;
-
-    const int hookLenght = 5;
-    DWORD addressOfSellFunctionValueCall = 0x465AD6;
-    jumpback = addressOfSellFunctionValueCall + hookLenght;
-    
-    trade = (_Trade)(moduleBase + tradeFunctionAddress);
-    print_text = (_Print_text)(moduleBase + printTextFunction);
-    get_sell_value = (_Get_sell_value)(moduleBase + sellFunctionValue);
-    Detour32((void*)addressOfSellFunctionValueCall, hookOverGetSellValue, hookLenght);
-
-    while (!(GetAsyncKeyState(VK_END))) {
-        autoTrade();
+// Auto-buy: If resource count is below the buy threshold, buy.
+void autoBuy() {
+    if (!doesMarketExist())
+        return;
+    for (int i = 0; i < NUM_RESOURCES; i++) {
+        if (*MATERIAL_ADDRESSES[i] < settingsBuy[i]) {
+            trade(1, 0, MATERIAL_IDS[i]);
+        }
     }
+}
 
-    unDetour((void*)addressOfSellFunctionValueCall);
-    FreeLibraryAndExitThread((HMODULE)param, 0);
+//-------------------------------------------------------------------
+// MainThread: Set up the trade function and run auto trading
+//-------------------------------------------------------------------
+DWORD WINAPI MainThread(LPVOID param) {
+    // Get the module base and set the trade function pointer.
+    uintptr_t moduleBase = (uintptr_t)GetModuleHandle(NULL);
+    const unsigned tradeFunctionAddress = 0x0065E60; // Adjust as needed.
+    trade = (_Trade)(moduleBase + tradeFunctionAddress);
+
+    // Main loop: perform auto-sell and auto-buy until VK_END is pressed.
+    while (!(GetAsyncKeyState(VK_END))) {
+        autoSell();
+        autoBuy();
+        Sleep(50); // Small delay to reduce CPU usage.
+    }
     return 0;
 }
-BOOL APIENTRY DllMain( HMODULE hModule,
-                       DWORD  ul_reason_for_call,
-                       LPVOID lpReserved
-                     )
-{
-    switch (ul_reason_for_call)
+
+//-------------------------------------------------------------------
+// Settings Window UI
+//-------------------------------------------------------------------
+// The window will show for each resource:
+//   - Resource name (left column)
+//   - Autosell slider (ID range: 3000+index)
+//   - Autosell value display (ID range: 4000+index)
+//   - Autobuy slider (ID range: 5000+index)
+//   - Autobuy value display (ID range: 6000+index)
+// Additionally, header labels indicate which column is for selling and which for buying.
+LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    switch (uMsg) {
+    case WM_CREATE:
     {
+        // Create header labels.
+        CreateWindowEx(0, _T("STATIC"), _T("Resource"), WS_CHILD | WS_VISIBLE,
+            10, 0, 100, 20, hwnd, (HMENU)10, g_hInstance, NULL);
+        CreateWindowEx(0, _T("STATIC"), _T("Sell Threshold"), WS_CHILD | WS_VISIBLE,
+            120, 0, 200, 20, hwnd, (HMENU)20, g_hInstance, NULL);
+        CreateWindowEx(0, _T("STATIC"), _T("Buy Threshold"), WS_CHILD | WS_VISIBLE,
+            390, 0, 200, 20, hwnd, (HMENU)30, g_hInstance, NULL);
+
+        // Create controls for each resource.
+        for (int i = 0; i < NUM_RESOURCES; i++) {
+            // Y-position offset by 20 to leave room for headers.
+            int yPos = 20 + i * 35;
+
+            // Create the resource name label.
+            CreateWindowEx(0, _T("STATIC"), resourceNames[i],
+                WS_CHILD | WS_VISIBLE,
+                10, yPos, 100, 20, hwnd, (HMENU)(100 + i), g_hInstance, NULL);
+
+            // Create autosell slider.
+            HWND hSellSlider = CreateWindowEx(0, TRACKBAR_CLASS, NULL,
+                WS_CHILD | WS_VISIBLE | TBS_AUTOTICKS,
+                120, yPos, 200, 20, hwnd, (HMENU)(3000 + i), g_hInstance, NULL);
+            SendMessage(hSellSlider, TBM_SETRANGE, TRUE, MAKELPARAM(0, 200));
+            SendMessage(hSellSlider, TBM_SETTICFREQ, 5, 0);
+            // Set the line and page size so keyboard moves in increments of 5.
+            SendMessage(hSellSlider, TBM_SETLINESIZE, 0, 5);
+            SendMessage(hSellSlider, TBM_SETPAGESIZE, 0, 5);
+            SendMessage(hSellSlider, TBM_SETPOS, TRUE, settingsSell[i]);
+
+            // Create static control to display autosell value.
+            TCHAR sellValue[16];
+            _stprintf_s(sellValue, _countof(sellValue), _T("%d"), settingsSell[i]);
+            CreateWindowEx(0, _T("STATIC"), sellValue,
+                WS_CHILD | WS_VISIBLE,
+                330, yPos, 50, 20, hwnd, (HMENU)(4000 + i), g_hInstance, NULL);
+
+            // Create autobuy slider.
+            HWND hBuySlider = CreateWindowEx(0, TRACKBAR_CLASS, NULL,
+                WS_CHILD | WS_VISIBLE | TBS_AUTOTICKS,
+                390, yPos, 200, 20, hwnd, (HMENU)(5000 + i), g_hInstance, NULL);
+            SendMessage(hBuySlider, TBM_SETRANGE, TRUE, MAKELPARAM(0, 200));
+            SendMessage(hBuySlider, TBM_SETTICFREQ, 5, 0);
+            SendMessage(hBuySlider, TBM_SETLINESIZE, 0, 5);
+            SendMessage(hBuySlider, TBM_SETPAGESIZE, 0, 5);
+            SendMessage(hBuySlider, TBM_SETPOS, TRUE, settingsBuy[i]);
+
+            // Create static control to display autobuy value.
+            TCHAR buyValue[16];
+            _stprintf_s(buyValue, _countof(buyValue), _T("%d"), settingsBuy[i]);
+            CreateWindowEx(0, _T("STATIC"), buyValue,
+                WS_CHILD | WS_VISIBLE,
+                600, yPos, 50, 20, hwnd, (HMENU)(6000 + i), g_hInstance, NULL);
+        }
+        return 0;
+    }
+    case WM_HSCROLL:
+    {
+        // Identify which slider sent the notification.
+        HWND hSlider = (HWND)lParam;
+        if (hSlider) {
+            int id = GetDlgCtrlID(hSlider);
+            int rawPos = (int)SendMessage(hSlider, TBM_GETPOS, 0, 0);
+            // Round to the nearest multiple of 5.
+            int pos = ((rawPos + 2) / 5) * 5;
+            // Update slider position if needed.
+            if (rawPos != pos) {
+                SendMessage(hSlider, TBM_SETPOS, TRUE, pos);
+            }
+
+            // Update autosell sliders (IDs: 3000 .. 3000+NUM_RESOURCES-1).
+            if (id >= 3000 && id < 3000 + NUM_RESOURCES) {
+                int index = id - 3000;
+                settingsSell[index] = (unsigned short)pos;
+                TCHAR buf[16];
+                _stprintf_s(buf, _countof(buf), _T("%d"), pos);
+                HWND hStatic = GetDlgItem(hwnd, 4000 + index);
+                if (hStatic)
+                    SetWindowText(hStatic, buf);
+            }
+            // Update autobuy sliders (IDs: 5000 .. 5000+NUM_RESOURCES-1).
+            else if (id >= 5000 && id < 5000 + NUM_RESOURCES) {
+                int index = id - 5000;
+                settingsBuy[index] = (unsigned short)pos;
+                TCHAR buf[16];
+                _stprintf_s(buf, _countof(buf), _T("%d"), pos);
+                HWND hStatic = GetDlgItem(hwnd, 6000 + index);
+                if (hStatic)
+                    SetWindowText(hStatic, buf);
+            }
+        }
+        return 0;
+    }
+    case WM_DESTROY:
+        PostQuitMessage(0);
+        return 0;
+    default:
+        return DefWindowProc(hwnd, uMsg, wParam, lParam);
+    }
+}
+
+// Thread function that creates and runs the settings window.
+DWORD WINAPI SettingsWindowThread(LPVOID lpParameter) {
+    INITCOMMONCONTROLSEX icex;
+    icex.dwSize = sizeof(icex);
+    icex.dwICC = ICC_BAR_CLASSES;
+    InitCommonControlsEx(&icex);
+
+    const TCHAR* className = _T("SettingsWindowClass");
+    WNDCLASSEX wc = { 0 };
+    wc.cbSize = sizeof(WNDCLASSEX);
+    wc.lpfnWndProc = SettingsWndProc;
+    wc.hInstance = g_hInstance;
+    wc.lpszClassName = className;
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    RegisterClassEx(&wc);
+
+    // Create a window wide enough for both slider columns.
+    HWND hwnd = CreateWindowEx(0, className, _T("Resource Settings"), WS_OVERLAPPEDWINDOW,
+        CW_USEDEFAULT, CW_USEDEFAULT, 680, NUM_RESOURCES * 35 + 70,
+        NULL, NULL, g_hInstance, NULL);
+    if (hwnd) {
+        ShowWindow(hwnd, SW_SHOW);
+        UpdateWindow(hwnd);
+        MSG msg;
+        while (GetMessage(&msg, NULL, 0, 0) > 0) {
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
+    }
+    return 0;
+}
+
+//-------------------------------------------------------------------
+// DllMain: Launch both the auto trading thread and the settings UI thread
+//-------------------------------------------------------------------
+BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
+    switch (ul_reason_for_call) {
     case DLL_PROCESS_ATTACH:
-        CreateThread(0, 0, MainThread, hModule, 0, 0);
+        g_hInstance = hModule;
+        CreateThread(NULL, 0, MainThread, hModule, 0, NULL);
+        CreateThread(NULL, 0, SettingsWindowThread, NULL, 0, NULL);
+        break;
     case DLL_THREAD_ATTACH:
     case DLL_THREAD_DETACH:
     case DLL_PROCESS_DETACH:
@@ -219,4 +284,3 @@ BOOL APIENTRY DllMain( HMODULE hModule,
     }
     return TRUE;
 }
-
