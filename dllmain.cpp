@@ -15,6 +15,9 @@ HINSTANCE g_hInstance;
 //-------------------------------------------------------------------
 #define NUM_RESOURCES 20
 
+// Define the INI file name for saving settings.
+#define SETTINGS_FILE _T("settings.ini")
+
 // Autosell thresholds: if the in-game resource count exceeds this value, sell.
 unsigned short settingsSell[NUM_RESOURCES] = {
     200,200,200,200,200,200,200,200,200,200,
@@ -24,7 +27,8 @@ unsigned short settingsSell[NUM_RESOURCES] = {
 // Autobuy thresholds: if the in-game resource count is below this value, buy.
 // Initialize to 0 so nothing is bought by default.
 unsigned short settingsBuy[NUM_RESOURCES] = {
-    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+    0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0
 };
 
 // Resource IDs corresponding to each material.
@@ -56,6 +60,37 @@ const TCHAR* resourceNames[NUM_RESOURCES] = {
     _T("leather armor"),
     _T("metal armor")
 };
+
+//-------------------------------------------------------------------
+// Settings Persistence Functions
+//-------------------------------------------------------------------
+void LoadSettings() {
+    // For each resource, load autosell and autobuy thresholds from the INI file.
+    for (int i = 0; i < NUM_RESOURCES; i++) {
+        TCHAR key[16];
+        // Load autosell threshold. Default is 200.
+        _stprintf_s(key, _countof(key), _T("Sell%d"), i);
+        settingsSell[i] = (unsigned short)GetPrivateProfileInt(_T("Thresholds"), key, 200, SETTINGS_FILE);
+        // Load autobuy threshold. Default is 0.
+        _stprintf_s(key, _countof(key), _T("Buy%d"), i);
+        settingsBuy[i] = (unsigned short)GetPrivateProfileInt(_T("Thresholds"), key, 0, SETTINGS_FILE);
+    }
+}
+
+void SaveSettings() {
+    TCHAR buffer[16];
+    TCHAR key[16];
+    for (int i = 0; i < NUM_RESOURCES; i++) {
+        // Save autosell threshold.
+        _stprintf_s(key, _countof(key), _T("Sell%d"), i);
+        _stprintf_s(buffer, _countof(buffer), _T("%d"), settingsSell[i]);
+        WritePrivateProfileString(_T("Thresholds"), key, buffer, SETTINGS_FILE);
+        // Save autobuy threshold.
+        _stprintf_s(key, _countof(key), _T("Buy%d"), i);
+        _stprintf_s(buffer, _countof(buffer), _T("%d"), settingsBuy[i]);
+        WritePrivateProfileString(_T("Thresholds"), key, buffer, SETTINGS_FILE);
+    }
+}
 
 //-------------------------------------------------------------------
 // Auto trading (sell and buy) functionality definitions
@@ -130,11 +165,15 @@ DWORD WINAPI MainThread(LPVOID param) {
 //   - Autosell value display (ID range: 4000+index)
 //   - Autobuy slider (ID range: 5000+index)
 //   - Autobuy value display (ID range: 6000+index)
-// Additionally, header labels indicate which column is for selling and which for buying.
+// Additionally, header labels indicate which column is for selling and which for buying,
+// and a "Save" button (ID 7000) is added at the bottom.
 LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
     case WM_CREATE:
     {
+        // Load settings from file.
+        LoadSettings();
+
         // Create header labels.
         CreateWindowEx(0, _T("STATIC"), _T("Resource"), WS_CHILD | WS_VISIBLE,
             10, 0, 100, 20, hwnd, (HMENU)10, g_hInstance, NULL);
@@ -159,7 +198,6 @@ LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPa
                 120, yPos, 200, 20, hwnd, (HMENU)(3000 + i), g_hInstance, NULL);
             SendMessage(hSellSlider, TBM_SETRANGE, TRUE, MAKELPARAM(0, 200));
             SendMessage(hSellSlider, TBM_SETTICFREQ, 5, 0);
-            // Set the line and page size so keyboard moves in increments of 5.
             SendMessage(hSellSlider, TBM_SETLINESIZE, 0, 5);
             SendMessage(hSellSlider, TBM_SETPAGESIZE, 0, 5);
             SendMessage(hSellSlider, TBM_SETPOS, TRUE, settingsSell[i]);
@@ -188,6 +226,11 @@ LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPa
                 WS_CHILD | WS_VISIBLE,
                 600, yPos, 50, 20, hwnd, (HMENU)(6000 + i), g_hInstance, NULL);
         }
+
+        // Create a "Save" button at the bottom.
+        CreateWindowEx(0, _T("BUTTON"), _T("Save"),
+            WS_CHILD | WS_VISIBLE,
+            10, 20 + NUM_RESOURCES * 35, 100, 30, hwnd, (HMENU)7000, g_hInstance, NULL);
         return 0;
     }
     case WM_HSCROLL:
@@ -199,7 +242,6 @@ LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPa
             int rawPos = (int)SendMessage(hSlider, TBM_GETPOS, 0, 0);
             // Round to the nearest multiple of 5.
             int pos = ((rawPos + 2) / 5) * 5;
-            // Update slider position if needed.
             if (rawPos != pos) {
                 SendMessage(hSlider, TBM_SETPOS, TRUE, pos);
             }
@@ -227,15 +269,27 @@ LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPa
         }
         return 0;
     }
+    case WM_COMMAND:
+    {
+        // Check if the Save button (ID 7000) was clicked.
+        if (LOWORD(wParam) == 7000 && HIWORD(wParam) == BN_CLICKED) {
+            SaveSettings();
+            MessageBox(hwnd, _T("Settings saved."), _T("Info"), MB_OK);
+        }
+        break;
+    }
     case WM_DESTROY:
         PostQuitMessage(0);
         return 0;
     default:
         return DefWindowProc(hwnd, uMsg, wParam, lParam);
     }
+    return 0;
 }
 
+//-------------------------------------------------------------------
 // Thread function that creates and runs the settings window.
+//-------------------------------------------------------------------
 DWORD WINAPI SettingsWindowThread(LPVOID lpParameter) {
     INITCOMMONCONTROLSEX icex;
     icex.dwSize = sizeof(icex);
@@ -251,9 +305,9 @@ DWORD WINAPI SettingsWindowThread(LPVOID lpParameter) {
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     RegisterClassEx(&wc);
 
-    // Create a window wide enough for both slider columns.
+    // Create a window wide enough for both slider columns plus extra height for the Save button.
     HWND hwnd = CreateWindowEx(0, className, _T("Resource Settings"), WS_OVERLAPPEDWINDOW,
-        CW_USEDEFAULT, CW_USEDEFAULT, 680, NUM_RESOURCES * 35 + 70,
+        CW_USEDEFAULT, CW_USEDEFAULT, 680, NUM_RESOURCES * 35 + 110,
         NULL, NULL, g_hInstance, NULL);
     if (hwnd) {
         ShowWindow(hwnd, SW_SHOW);
