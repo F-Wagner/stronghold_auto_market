@@ -1,11 +1,14 @@
 // dllmain.cpp : Defines the entry point for the DLL application.
 #include "pch.h"
-#include <windows.h>
-#include <commctrl.h>
 #include <tchar.h>
 #include <stdio.h>
 
+#define _WIN32_WINNT 0x0600   // or higher, e.g. 0x0601 for Win7, etc.
+#include <windows.h>
+#include <commctrl.h>
+#include <uxtheme.h>         // For SetWindowTheme
 #pragma comment(lib, "comctl32.lib")
+#pragma comment(lib, "uxtheme.lib")
 
 // Global instance handle for our DLL
 HINSTANCE g_hInstance;
@@ -165,89 +168,154 @@ DWORD WINAPI MainThread(LPVOID param) {
 //   - Autosell value display (ID range: 4000+index)
 //   - Autobuy slider (ID range: 5000+index)
 //   - Autobuy value display (ID range: 6000+index)
-// Additionally, header labels indicate which column is for selling and which for buying,
-// and a "Save" button (ID 7000) is added at the bottom.
-LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
-    switch (uMsg) {
+// Additionally, a "Save" button (ID 7000) is added at the bottom.
+LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+    switch (uMsg)
+    {
     case WM_CREATE:
     {
         // Load settings from file.
         LoadSettings();
 
-        // Create header labels.
-        CreateWindowEx(0, _T("STATIC"), _T("Resource"), WS_CHILD | WS_VISIBLE,
-            10, 0, 100, 20, hwnd, (HMENU)10, g_hInstance, NULL);
-        CreateWindowEx(0, _T("STATIC"), _T("Sell Threshold"), WS_CHILD | WS_VISIBLE,
-            120, 0, 200, 20, hwnd, (HMENU)20, g_hInstance, NULL);
-        CreateWindowEx(0, _T("STATIC"), _T("Buy Threshold"), WS_CHILD | WS_VISIBLE,
-            390, 0, 200, 20, hwnd, (HMENU)30, g_hInstance, NULL);
+        HFONT hFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
 
-        // Create controls for each resource.
-        for (int i = 0; i < NUM_RESOURCES; i++) {
-            // Y-position offset by 20 to leave room for headers.
-            int yPos = 20 + i * 35;
+        // Create a group box to visually contain the threshold controls.
+        HWND hGroup = CreateWindowEx(
+            0, _T("BUTTON"), _T("Resource Thresholds"),
+            WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
+            5, 5, 490, NUM_RESOURCES * 25 + 90, // Adjust width/height as needed
+            hwnd, NULL, g_hInstance, NULL
+        );
+        SendMessage(hGroup, WM_SETFONT, (WPARAM)hFont, TRUE);
 
-            // Create the resource name label.
-            CreateWindowEx(0, _T("STATIC"), resourceNames[i],
+        int startY = 25;  // Y offset inside the group box
+        for (int i = 0; i < NUM_RESOURCES; i++)
+        {
+            int yPos = startY + i * 25; // 25 px per row
+            int xPos = 15;              // indent inside group box
+
+            // Resource name label
+            HWND hName = CreateWindowEx(
+                0, _T("STATIC"), resourceNames[i],
                 WS_CHILD | WS_VISIBLE,
-                10, yPos, 100, 20, hwnd, (HMENU)(100 + i), g_hInstance, NULL);
+                xPos, yPos, 80, 20,
+                hwnd, (HMENU)(100 + i), g_hInstance, NULL
+            );
+            SendMessage(hName, WM_SETFONT, (WPARAM)hFont, TRUE);
 
-            // Create autosell slider.
-            HWND hSellSlider = CreateWindowEx(0, TRACKBAR_CLASS, NULL,
+            xPos += 85;
+
+            // "Sell" label
+            HWND hSellLabel = CreateWindowEx(
+                0, _T("STATIC"), _T("Sell:"),
+                WS_CHILD | WS_VISIBLE,
+                xPos, yPos, 30, 20,
+                hwnd, NULL, g_hInstance, NULL
+            );
+            SendMessage(hSellLabel, WM_SETFONT, (WPARAM)hFont, TRUE);
+
+            xPos += 35;
+
+            // Create autosell slider (compact width)
+            HWND hSellSlider = CreateWindowEx(
+                0, TRACKBAR_CLASS, NULL,
                 WS_CHILD | WS_VISIBLE | TBS_AUTOTICKS,
-                120, yPos, 200, 20, hwnd, (HMENU)(3000 + i), g_hInstance, NULL);
+                xPos, yPos - 2, 100, 25,
+                hwnd, (HMENU)(3000 + i), g_hInstance, NULL
+            );
             SendMessage(hSellSlider, TBM_SETRANGE, TRUE, MAKELPARAM(0, 200));
             SendMessage(hSellSlider, TBM_SETTICFREQ, 5, 0);
             SendMessage(hSellSlider, TBM_SETLINESIZE, 0, 5);
             SendMessage(hSellSlider, TBM_SETPAGESIZE, 0, 5);
             SendMessage(hSellSlider, TBM_SETPOS, TRUE, settingsSell[i]);
+            // Force Explorer theme for a modern look
+            SetWindowTheme(hSellSlider, L"Explorer", NULL);
 
-            // Create static control to display autosell value.
+            xPos += 105;
+
+            // Sell value label
             TCHAR sellValue[16];
             _stprintf_s(sellValue, _countof(sellValue), _T("%d"), settingsSell[i]);
-            CreateWindowEx(0, _T("STATIC"), sellValue,
+            HWND hSellVal = CreateWindowEx(
+                0, _T("STATIC"), sellValue,
                 WS_CHILD | WS_VISIBLE,
-                330, yPos, 50, 20, hwnd, (HMENU)(4000 + i), g_hInstance, NULL);
+                xPos, yPos, 30, 20,
+                hwnd, (HMENU)(4000 + i), g_hInstance, NULL
+            );
+            SendMessage(hSellVal, WM_SETFONT, (WPARAM)hFont, TRUE);
 
-            // Create autobuy slider.
-            HWND hBuySlider = CreateWindowEx(0, TRACKBAR_CLASS, NULL,
+            xPos += 40;
+
+            // "Buy" label
+            HWND hBuyLabel = CreateWindowEx(
+                0, _T("STATIC"), _T("Buy:"),
+                WS_CHILD | WS_VISIBLE,
+                xPos, yPos, 30, 20,
+                hwnd, NULL, g_hInstance, NULL
+            );
+            SendMessage(hBuyLabel, WM_SETFONT, (WPARAM)hFont, TRUE);
+
+            xPos += 35;
+
+            // Create autobuy slider
+            HWND hBuySlider = CreateWindowEx(
+                0, TRACKBAR_CLASS, NULL,
                 WS_CHILD | WS_VISIBLE | TBS_AUTOTICKS,
-                390, yPos, 200, 20, hwnd, (HMENU)(5000 + i), g_hInstance, NULL);
+                xPos, yPos - 2, 100, 25,
+                hwnd, (HMENU)(5000 + i), g_hInstance, NULL
+            );
             SendMessage(hBuySlider, TBM_SETRANGE, TRUE, MAKELPARAM(0, 200));
             SendMessage(hBuySlider, TBM_SETTICFREQ, 5, 0);
             SendMessage(hBuySlider, TBM_SETLINESIZE, 0, 5);
             SendMessage(hBuySlider, TBM_SETPAGESIZE, 0, 5);
             SendMessage(hBuySlider, TBM_SETPOS, TRUE, settingsBuy[i]);
+            // Force Explorer theme
+            SetWindowTheme(hBuySlider, L"Explorer", NULL);
 
-            // Create static control to display autobuy value.
+            xPos += 105;
+
+            // Buy value label
             TCHAR buyValue[16];
             _stprintf_s(buyValue, _countof(buyValue), _T("%d"), settingsBuy[i]);
-            CreateWindowEx(0, _T("STATIC"), buyValue,
+            HWND hBuyVal = CreateWindowEx(
+                0, _T("STATIC"), buyValue,
                 WS_CHILD | WS_VISIBLE,
-                600, yPos, 50, 20, hwnd, (HMENU)(6000 + i), g_hInstance, NULL);
+                xPos, yPos, 30, 20,
+                hwnd, (HMENU)(6000 + i), g_hInstance, NULL
+            );
+            SendMessage(hBuyVal, WM_SETFONT, (WPARAM)hFont, TRUE);
         }
 
-        // Create a "Save" button at the bottom.
-        CreateWindowEx(0, _T("BUTTON"), _T("Save"),
-            WS_CHILD | WS_VISIBLE,
-            10, 20 + NUM_RESOURCES * 35, 100, 30, hwnd, (HMENU)7000, g_hInstance, NULL);
+        // Create a "Save" button below the group box
+        HWND hSaveBtn = CreateWindowEx(
+            0, _T("BUTTON"), _T("Save"),
+            WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+            15, NUM_RESOURCES * 25 + 45, 80, 25, // adjust as needed
+            hwnd, (HMENU)7000, g_hInstance, NULL
+        );
+        SendMessage(hSaveBtn, WM_SETFONT, (WPARAM)hFont, TRUE);
+
         return 0;
     }
+
     case WM_HSCROLL:
     {
-        // Identify which slider sent the notification.
+        // Handle slider updates
         HWND hSlider = (HWND)lParam;
-        if (hSlider) {
+        if (hSlider)
+        {
             int id = GetDlgCtrlID(hSlider);
             int rawPos = (int)SendMessage(hSlider, TBM_GETPOS, 0, 0);
-            // Round to the nearest multiple of 5.
-            int pos = ((rawPos + 2) / 5) * 5;
-            if (rawPos != pos) {
+            int pos = ((rawPos + 2) / 5) * 5; // snap to multiples of 5
+            if (rawPos != pos)
+            {
                 SendMessage(hSlider, TBM_SETPOS, TRUE, pos);
             }
 
-            // Update autosell sliders (IDs: 3000 .. 3000+NUM_RESOURCES-1).
-            if (id >= 3000 && id < 3000 + NUM_RESOURCES) {
+            // Sell sliders
+            if (id >= 3000 && id < 3000 + NUM_RESOURCES)
+            {
                 int index = id - 3000;
                 settingsSell[index] = (unsigned short)pos;
                 TCHAR buf[16];
@@ -256,8 +324,9 @@ LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPa
                 if (hStatic)
                     SetWindowText(hStatic, buf);
             }
-            // Update autobuy sliders (IDs: 5000 .. 5000+NUM_RESOURCES-1).
-            else if (id >= 5000 && id < 5000 + NUM_RESOURCES) {
+            // Buy sliders
+            else if (id >= 5000 && id < 5000 + NUM_RESOURCES)
+            {
                 int index = id - 5000;
                 settingsBuy[index] = (unsigned short)pos;
                 TCHAR buf[16];
@@ -269,22 +338,23 @@ LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPa
         }
         return 0;
     }
+
     case WM_COMMAND:
     {
-        // Check if the Save button (ID 7000) was clicked.
-        if (LOWORD(wParam) == 7000 && HIWORD(wParam) == BN_CLICKED) {
+        // Save button clicked
+        if (LOWORD(wParam) == 7000 && HIWORD(wParam) == BN_CLICKED)
+        {
             SaveSettings();
             MessageBox(hwnd, _T("Settings saved."), _T("Info"), MB_OK);
         }
         break;
     }
+
     case WM_DESTROY:
         PostQuitMessage(0);
         return 0;
-    default:
-        return DefWindowProc(hwnd, uMsg, wParam, lParam);
     }
-    return 0;
+    return DefWindowProc(hwnd, uMsg, wParam, lParam);
 }
 
 //-------------------------------------------------------------------
@@ -303,11 +373,15 @@ DWORD WINAPI SettingsWindowThread(LPVOID lpParameter) {
     wc.hInstance = g_hInstance;
     wc.lpszClassName = className;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);  // Set standard background brush
     RegisterClassEx(&wc);
 
-    // Create a window wide enough for both slider columns plus extra height for the Save button.
-    HWND hwnd = CreateWindowEx(0, className, _T("Resource Settings"), WS_OVERLAPPEDWINDOW,
-        CW_USEDEFAULT, CW_USEDEFAULT, 680, NUM_RESOURCES * 35 + 110,
+    // Create a window sized for the compact layout:
+    RECT rc = { 0, 0, 520, NUM_RESOURCES * 25 + 110 };
+    AdjustWindowRectEx(&rc, WS_OVERLAPPEDWINDOW, FALSE, 0);
+    HWND hwnd = CreateWindowEx(
+        0, className, _T("Resource Settings"), WS_OVERLAPPEDWINDOW,
+        CW_USEDEFAULT, CW_USEDEFAULT, rc.right - rc.left, rc.bottom - rc.top,
         NULL, NULL, g_hInstance, NULL);
     if (hwnd) {
         ShowWindow(hwnd, SW_SHOW);
