@@ -1,6 +1,7 @@
-# changes from the original:
+# changes from the original (https://github.com/Vergenter/stronghold_autosell):
 - added a window to configure when resources should be bought / sold
 - added functionality to auto sell resources
+- added a save function to remember the thresholds between sessions
 # notes:
 - should be built int 32 bit / 86x to work (the picture suggests 64 bit, which should not work)
 - injector that can be used: https://github.com/adamhlt/DLL-Injector
